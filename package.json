@@ -1,0 +1,25 @@
+{
+  "name": "agent",
+  "version": "1.0.0",
+  "description": "molecularjs agent runner",
+  "scripts": {},
+  "keywords": [
+    "microservices",
+    "moleculer"
+  ],
+  "author": "FLYBYME",
+  "dependencies": {
+    "cron-mixin": "git+https://github.com/PaaS-Shack/cron-mixin.git",
+    "db-mixin": "git+https://github.com/PaaS-Shack/db-mixin.git",
+    "ioredis": "^5.0.3",
+    "moleculer": "0.14.21",
+    "moleculer-repl": "^0.7.1",
+    "nats": "^2.7.1",
+    "node-pty": "^0.10.1",
+    "simple-git": "^3.12.0"
+  },
+  "engines": {
+    "node": ">= 12.x.x"
+  },
+  "jest": {}
+}

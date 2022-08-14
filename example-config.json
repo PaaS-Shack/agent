@@ -1,0 +1,19 @@
+{
+    "HASHID_SALT": "test",
+    "MONGO_URI": "mongodb://localhost/data",
+    "services":[{
+        "remote": "https://github.com/PaaS-Shack/procfs.git",
+        "branch": "main",
+        "name": "procfs",
+        "autoload": false,
+        "autoloadAgent": true,
+        "services": [],
+        "agents": [
+            {
+                "path": "./services/procfs.service",
+                "service": "procfs",
+                "version": 1
+            }
+        ]
+    }]
+}
