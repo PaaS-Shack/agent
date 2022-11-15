@@ -11,6 +11,8 @@
   "dependencies": {
     "cron-mixin": "git+https://github.com/PaaS-Shack/cron-mixin.git",
     "db-mixin": "git+https://github.com/PaaS-Shack/db-mixin.git",
+    "config-mixin": "git+https://github.com/FLYBYME/config-mixin.git",
+    "config-service": "git+https://github.com/FLYBYME/config.git",
     "ioredis": "^5.0.3",
     "moleculer": "0.14.21",
     "moleculer-repl": "^0.7.1",

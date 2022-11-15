@@ -26,8 +26,13 @@ const transporter = process.env.TRANSPORT || {
 const broker = new ServiceBroker({
     namespace: "broker",
     hotReload: true,
-    nodeID,
-    transporter
+    // nodeID,
+    transporter,
+    middlewares: [
+        require("./middlewares/async-context.middleware"),
+        require("./middlewares/check-permissions.middleware"),
+        require("./middlewares/find-entity.middleware"),
+    ],
 });
 broker.config = config
 
@@ -39,11 +44,22 @@ const loadService = (path) => {
     }
 }
 
+
+loadService("./agents/node.agent");
+
+loadService("./services/config.service");
+
 loadService("./services/services.service");
 loadService("./services/services.templates.service");
 loadService("./services/services.templates.instances.service");
 
+
 // Start server
-broker.start().then(() => broker.repl());
+broker.start().then(() => broker.repl()).then(() => {
+
+    for (let index = 0; index < config.dev.length; index++) {
+        loadService(config.dev[index]);
+    }
+});
 module.exports = broker
 

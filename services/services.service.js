@@ -5,6 +5,8 @@ const Cron = require("cron-mixin");
 
 const { MoleculerClientError } = require("moleculer").Errors;
 
+const config = require('../config.json')
+
 /**
  * attachments of addons service
  */
@@ -144,6 +146,19 @@ module.exports = {
 				return this.findEntity(ctx, { query: params });
 			}
 		},
+		cleanNode: {
+			description: "Add members to the addon",
+			params: {
+				nodeID: { type: "string", empty: false, optional: false },
+			},
+			async handler(ctx) {
+				const params = Object.assign({}, ctx.params);
+
+				const entities = await this.findEntities(ctx, { query: { nodeID: params.nodeID } })
+
+				return Promise.allSettled(entities.map((entity) => this.removeEntity(ctx, { id: entity.id })))
+			}
+		},
 		startAll: {
 			description: "Add members to the addon",
 			params: {
@@ -171,14 +186,12 @@ module.exports = {
 
 				let services = await this.findEntities(ctx, {});
 
-
 				for (let index = 0; index < services.length; index++) {
 					const service = services[index];
 					await ctx.call('v1.node.agent.reload', service, { nodeID: service.nodeID })
 						.catch(() =>
 							ctx.call('v1.node.agent.start', service, { nodeID: service.nodeID }).catch(() => null)
 						)
-
 				}
 			}
 		},
@@ -203,7 +216,6 @@ module.exports = {
 					if (isNaN(node.id.split('-').pop())) {
 						for (let i = 0; i < templates.length; i++) {
 							const template = templates[i];
-
 							promises.push(this.actions.startTemplate({
 								template: template.id,
 								nodeID: node.id,
@@ -213,6 +225,240 @@ module.exports = {
 						}
 					}
 				}
+
+				return Promise.allSettled(promises)
+			}
+		},
+		boostrapDomains: {
+			description: "Add members to the addon",
+			params: {
+
+			},
+			async handler(ctx) {
+				const params = Object.assign({}, ctx.params);
+				const promises = []
+
+				const certs = new Set()
+
+				const domainList = await ctx.call('v1.domains.find')
+
+				for (let index = 0; index < config.domains.length; index++) {
+					const domainInfo = config.domains[index];
+
+					let domain = domainList.find((domain) => domain.domain == domainInfo.domain)
+
+					if (!domain) {
+						domain = await ctx.call('v1.domains.create', {
+							domain: domainInfo.domain
+						})
+						console.log(domain)
+						domainList.push(domain)
+					}
+					console.log(domainInfo)
+					promises.push(domain)
+
+					for (let i = 0; i < domainInfo.records.length; i++) {
+						const recordInfo = domainInfo.records[i];
+
+						certs.add(recordInfo.fqdn)
+						for (let j = 0; j < recordInfo.data.length; j++) {
+							const data = recordInfo.data[j];
+							const entity = {
+								domain: domain.id,
+								fqdn: recordInfo.fqdn,
+								...data
+							}
+							let found = await ctx.call('v1.domains.records.resolveRecord', entity)
+
+							if (!found) {
+								console.log(found, entity)
+								found = await ctx.call('v1.domains.records.create', entity).catch((err) => err)
+							}
+							promises.push(found)
+						}
+
+
+
+					}
+					await Promise.allSettled(promises);
+					await ctx.call('v1.domains.sync')
+
+					for (let index = 0; index < domainInfo.routes.length; index++) {
+						const routeInfo = domainInfo.routes[index];
+
+						for (let j = 0; j < domainInfo.routers.length; j++) {
+							const data = domainInfo.routers[j];
+							const entity = {
+								domain: domain.id,
+								fqdn: routeInfo.vHost,
+								type: 'A',
+								data
+							}
+							console.log(entity)
+							let found = await ctx.call('v1.domains.records.resolveRecord', entity)
+
+							if (!found) {
+								console.log(found, entity)
+								found = await ctx.call('v1.domains.records.create', entity)
+							}
+							promises.push(found)
+						}
+						if (routeInfo.certOnly) {
+							certs.add(routeInfo.vHost)
+
+							continue;
+						}
+
+						let route = await ctx.call('v1.routes.resolveRoute', {
+							vHost: routeInfo.vHost
+						})
+
+						if (!route) {
+							route = await ctx.call('v1.routes.create', {
+								vHost: routeInfo.vHost,
+								strategy: 'LatencyStrategy'
+							})
+						}
+						promises.push(route);
+						if (Array.isArray(routeInfo.hosts)) {
+							for (let i = 0; i < routeInfo.hosts.length; i++) {
+								const hostInfo = routeInfo.hosts[i];
+								let host = await ctx.call('v1.routes.hosts.resolveHost', {
+									route: route.id,
+									vHost: routeInfo.vHost,
+									...hostInfo
+								})
+
+								if (!host) {
+									host = await ctx.call('v1.routes.hosts.create', {
+										route: route.id,
+										vHost: routeInfo.vHost,
+										...hostInfo
+									})
+								}
+								promises.push(host)
+							}
+						}
+
+
+					}
+
+
+
+				}
+				await Promise.allSettled(promises)
+				promises.push(ctx.call('v1.domains.sync'))
+				promises.push(ctx.call('v1.routes.sync'))
+
+				await Promise.allSettled(promises)
+
+				for (const domain of certs.values()) {
+
+					const found = await ctx.call('v1.certificates.letsencrypt.resolveDomain', { domain }).catch(() => null)
+					if (!found) {
+						promises.push(ctx.call('v1.certificates.letsencrypt.dns', { domain }))
+					}
+				}
+
+				return Promise.allSettled(promises);
+			}
+		},
+		boostrap: {
+			description: "Add members to the addon",
+			params: {
+
+			},
+			async handler(ctx) {
+				const params = Object.assign({}, ctx.params);
+				const promises = []
+
+				const services = await ctx.call('v1.services.templates.instances.find')
+
+				for (let index = 0; index < config.bootstrap.length; index++) {
+					const element = config.bootstrap[index];
+					const templates = new Set();
+					const list = []
+
+
+					for (let i = 0; i < element.services.length; i++) {
+						const serviceName = element.services[i];
+						const service = services.find((s) => s.service == serviceName)
+						if (!service) {
+							continue;
+						}
+						templates.add(service.template)
+						list.push(service)
+					}
+					for (let i = 0; i < element.agents.length; i++) {
+						const serviceName = element.agents[i];
+						const service = services.find((s) => s.service == serviceName)
+						if (!service) {
+							continue;
+						}
+						templates.add(service.template)
+						list.push(service)
+					}
+
+					for (const id of templates.values()) {
+						const template = await ctx.call('v1.services.templates.resolve', {
+							id
+						});
+						const cwd = `/mnt/${template.name}`;
+						promises.push(ctx.call('v1.services.updateTemplateRepo', {
+							template: id,
+							nodeID: element.nodeID
+						}).then(() => {
+							return Promise.allSettled(list
+								.filter((service) => service.template == id)
+								.map((templateService) => {
+									return ctx.call('v1.services.create', {
+										nodeID: element.nodeID,
+										path: `${cwd}/${templateService.path}`,
+										service: templateService.service,
+										version: templateService.version,
+										template: id,
+										instance: templateService.id,
+									})
+								}))
+						}))
+					}
+
+
+
+				}
+
+				return Promise.all(promises)
+			}
+		},
+		updateAllTemplateRepo: {
+			description: "Add members to the addon",
+			params: {
+				template: { type: "string", empty: false, optional: false },
+			},
+			async handler(ctx) {
+				const { template } = Object.assign({}, ctx.params);
+
+				const services = await this.findEntities(null, {
+					query: {
+						template
+					}
+				})
+
+				let nodes = new Set()
+				for (let index = 0; index < services.length; index++) {
+					const entity = services[index];
+					nodes.add(entity.nodeID)
+				}
+				const promises = []
+				for (const nodeID of nodes.values()) {
+					console.log(nodeID)
+					promises.push(ctx.call('v1.services.updateTemplateRepo', {
+						template,
+						nodeID
+					}).then((res) => { return { ...res, nodeID } }))
+
+				}
+
 
 				return Promise.allSettled(promises)
 			}
@@ -231,7 +477,7 @@ module.exports = {
 					id: params.template
 				});
 
-				const cwd = `/tmp/${template.name}`;
+				const cwd = `/mnt/${template.name}`;
 
 				const access = await ctx.call('v1.node.fs.access', {
 					path: cwd
@@ -277,7 +523,6 @@ module.exports = {
 				const list = await ctx.call("$node.list").then((res) => res.filter((node) => isNaN(node.id.split('-').pop())).map((node) => node.id))
 				const promises = [];
 
-
 				for (let index = 0; index < list.length; index++) {
 					const nodeID = list[index];
 					for (let i = 0; i < templates.length; i++) {
@@ -293,8 +538,6 @@ module.exports = {
 						});
 					}
 				}
-
-
 
 				for (let index = 0; index < list.length; index++) {
 					const nodeID = list[index];
@@ -318,22 +561,18 @@ module.exports = {
 		},
 		test: {
 			description: "Add members to the addon",
-			params: {
-
-			},
+			params: {},
 			async handler(ctx) {
 				const params = Object.assign({}, ctx.params);
 
+				const hosts = await ctx.call('v1.routes.hosts.find')
 
-				const config = {
-					ddns: ['orion', 'hades', 'zeus'],
-					proxy: ['chip', 'sling', 'gaia'],
-					services: ['chip', 'sling', 'gaia'],
-					dnsDomain: 'surfdns.net',
-					mainDomain: 'one-host.ca',
-				};
-
-				return this.actions.deploy(config)
+				return Promise.allSettled(hosts.map((host) => {
+					return ctx.call('v1.routes.hosts.update', {
+						id: host.id,
+						cluster: 'default'
+					})
+				}))
 			}
 		},
 		startTemplate: {
@@ -343,6 +582,7 @@ module.exports = {
 				nodeID: { type: "string", empty: false, optional: true },
 				services: { type: "boolean", default: true, optional: true },
 				agents: { type: "boolean", default: false, optional: true },
+				npm: { type: "boolean", default: true, optional: true },
 			},
 			async handler(ctx) {
 				const params = Object.assign({}, ctx.params);
@@ -364,14 +604,12 @@ module.exports = {
 					return Promise.all(promises)
 				}
 
-
-
 				const template = await ctx.call('v1.services.templates.resolve', {
 					id: params.template,
 					populate: ['services', 'agents']
 				})
 
-				const cwd = `/tmp/${template.name}`
+				const cwd = `/mnt/${template.name}`
 
 				const access = await ctx.call('v1.node.fs.access', {
 					path: cwd
@@ -384,15 +622,13 @@ module.exports = {
 				}
 
 				await ctx.call('v1.node.agent.repo', {
-					npm: true,
+					npm: params.npm,
 					remote: template.remote,
 					branch: template.branch,
 					cwd,
 				}, { nodeID }).then((res) => { console.log(res) }).catch((err) => { console.log(err) });
 
-
 				const promises = [];
-
 
 				if (params.services) {
 					for (let index = 0; index < template.services.length; index++) {
@@ -412,14 +648,11 @@ module.exports = {
 									nodeID
 								}).then((service) => ctx.call('v1.services.reload', { id: service.id })))
 						);
-
 					}
 				}
 				if (params.agents) {
 					for (let index = 0; index < template.agents.length; index++) {
 						const templateService = template.agents[index];
-
-
 
 						promises.push(ctx.call('v1.services.create', {
 							nodeID,
@@ -495,6 +728,20 @@ module.exports = {
 				}))
 			}
 		},
+
+		stopAll: {
+			description: "Add members to the addon",
+			params: {
+
+			},
+			async handler(ctx) {
+				const params = Object.assign({}, ctx.params);
+				const services = await this.findEntities(ctx, { scope: false })
+				return Promise.allSettled(services.map((service) => {
+					return this.actions.stop({ id: service.id })
+				}))
+			}
+		},
 	},
 
 	/**
@@ -503,22 +750,30 @@ module.exports = {
 	events: {
 		async "$node.connected"(ctx) {
 			const params = Object.assign({}, ctx.params);
-			const nodeID = params.node.id
-			const keys = Object.keys(this.broker.config)
-			for (let index = 0; index < keys.length; index++) {
-				const key = keys[index];
-				const value = this.broker.config[key];
-				await ctx.call('v1.node.setEnv', { key, value }, { nodeID })
-			}
 
-			let services = await this.findEntities(ctx, { query: { nodeID } });
+			setTimeout(async () => {
+				const nodeID = params.node.id
+				const keys = Object.keys(config)
+				for (let index = 0; index < keys.length; index++) {
+					const key = keys[index];
+					const value = config[key];
+					if (key !== 'services' && !Array.isArray(value))
+						await ctx.call('v1.node.setEnv', { key, value }, { nodeID }).catch(() => {
 
-			for (let index = 0; index < services.length; index++) {
-				const service = services[index];
-				await ctx.call('v1.node.agent.start', service, { nodeID })
-			}
+						})
+				}
 
-			this.logger.info(`Node '${params.node.id}' is connected! $node.connected`, services);
+				let services = await this.findEntities(ctx, { query: { nodeID } });
+
+				for (let index = 0; index < services.length; index++) {
+					const service = services[index];
+
+					await ctx.call('v1.node.agent.start', service, { nodeID })
+				}
+
+				this.logger.info(`Node '${params.node.id}' is connected! $node.connected`, services);
+			}, 1000)
+
 		},
 		async "$node.disconnected"(ctx) {
 			const params = Object.assign({}, ctx.params);

@@ -120,6 +120,23 @@ module.exports = {
                     .then(() => repo.status())
             }
         },
+        'git.init': {
+            params: {
+                cwd: { type: "string", empty: false, optional: false },
+                bare: { type: "boolean", default: false, optional: false },
+            },
+            async handler(ctx) {
+                const params = Object.assign({}, ctx.params);
+                const repo = simpleGit(params.cwd, {
+                    progress({ method, stage, progress }) {
+                        console.log(`git.${method} ${stage} stage ${progress}% complete`);
+                    },
+                });
+                return repo.checkIsRepo(params.bare ? 'bare' : undefined)
+                    .then((isRepo) => !isRepo && repo.init(params.bare))
+                    .then(() => repo)
+            }
+        },
         'git.log': {
             params: {
                 cwd: { type: "string", empty: false, optional: false },
